@@ -1,0 +1,96 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    container_name: meow-monitor-db
+    environment:
+      POSTGRES_USER: meow_user
+      POSTGRES_PASSWORD: meow_password_dev
+      POSTGRES_DB: meow_monitor
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U meow_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - meow-monitor-network
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: meow-monitor-backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://meow_user:meow_password_dev@db:5432/meow_monitor
+      PYTHONUNBUFFERED: 1
+      ENVIRONMENT: development
+      SECRET_KEY: dev-secret-key-change-in-production
+      JWT_ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: 30
+    volumes:
+      - ./backend:/app
+      - backend_cache:/app/.pytest_cache
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - meow-monitor-network
+
+  # React Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: development
+    container_name: meow-monitor-frontend
+    command: npm start
+    ports:
+      - "3000:3000"
+    environment:
+      REACT_APP_API_URL: http://localhost:8000
+      REACT_APP_API_WEBSOCKET_URL: ws://localhost:8000
+      BROWSER: none
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+      - /app/node_modules
+    depends_on:
+      - backend
+    networks:
+      - meow-monitor-network
+
+  # Redis for caching and real-time features (optional)
+  redis:
+    image: redis:7-alpine
+    container_name: meow-monitor-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - meow-monitor-network
+
+volumes:
+  postgres_data:
+  redis_data:
+  backend_cache:
+
+networks:
+  meow-monitor-network:
+    driver: bridge
